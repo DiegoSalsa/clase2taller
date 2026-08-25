@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Bootstrap de una sola vez para el servidor UBB asignado a Diego (user9).
+# Bootstrap de una sola vez para el servidor UBB asignado a user9.
 # Ejecutar como root dentro del servidor.
 
 DEPLOY_USER="${DEPLOY_USER:-gpsuser9}"
 DEPLOY_PATH="${DEPLOY_PATH:-/srv/clase2taller}"
 REPO_URL="${REPO_URL:-https://github.com/DiegoSalsa/clase2taller.git}"
+DEPLOY_BRANCH="${DEPLOY_BRANCH:-main}"
 NODE_MAJOR="${NODE_MAJOR:-20}"
 APP_PORT="${APP_PORT:-1546}"
 DB_HOST="${DB_HOST:-127.0.0.1}"
@@ -67,14 +68,8 @@ fi
 chown -R "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_PATH"
 
 runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" remote set-url origin "$REPO_URL"
-runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" fetch origin --prune
-
-if runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" show-ref --verify --quiet refs/remotes/origin/production; then
-  runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" checkout -B production origin/production
-else
-  runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" checkout main
-  echo "AVISO: la rama production todavía no existe; GitHub Actions la creará tras un CI exitoso."
-fi
+runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" fetch origin "$DEPLOY_BRANCH" --prune
+runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" checkout -B "$DEPLOY_BRANCH" "origin/$DEPLOY_BRANCH"
 
 ENV_FILE="$DEPLOY_PATH/backend/src/config/.env"
 echo "==> Creando $ENV_FILE sin guardar secretos en GitHub"
@@ -95,7 +90,7 @@ echo "==> Probando conexión PostgreSQL"
 if PGPASSWORD="$DB_PASSWORD" psql -h "$DB_HOST" -U "$DB_USERNAME" -d "$DATABASE" -c 'SELECT 1;' >/dev/null 2>&1; then
   echo "    PostgreSQL OK"
 else
-  echo "AVISO: no se pudo validar PostgreSQL en ${DB_HOST}:5432. El deploy continuará; revisa el host de BD si el backend no inicia." >&2
+  echo "AVISO: no se pudo validar PostgreSQL en ${DB_HOST}:5432. Se intentará iniciar igual; revisa el host de BD si falla." >&2
 fi
 
 echo "==> Instalando cron de auto-deploy cada 2 minutos"
@@ -103,7 +98,7 @@ CRON_FILE="/etc/cron.d/clase2taller-auto-deploy"
 cat > "$CRON_FILE" <<EOF
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-*/2 * * * * ${DEPLOY_USER} cd ${DEPLOY_PATH} && DEPLOY_PATH=${DEPLOY_PATH} bash scripts/auto-deploy.sh >> /var/log/clase2taller-deploy.log 2>&1
+*/2 * * * * ${DEPLOY_USER} cd ${DEPLOY_PATH} && DEPLOY_PATH=${DEPLOY_PATH} DEPLOY_BRANCH=${DEPLOY_BRANCH} bash scripts/auto-deploy.sh >> /var/log/clase2taller-deploy.log 2>&1
 EOF
 chmod 0644 "$CRON_FILE"
 touch /var/log/clase2taller-deploy.log
@@ -111,20 +106,19 @@ chown "$DEPLOY_USER:$DEPLOY_USER" /var/log/clase2taller-deploy.log
 
 chmod +x "$DEPLOY_PATH/scripts/"*.sh 2>/dev/null || true
 
-# Configura el servicio de resurrección de PM2 para este usuario.
+# Configura la resurrección de PM2 al reiniciar el servidor.
 pm2 startup systemd -u "$DEPLOY_USER" --hp "$DEPLOY_HOME" >/dev/null 2>&1 || true
 
-if runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" show-ref --verify --quiet refs/remotes/origin/production; then
-  echo "==> Ejecutando primer deploy"
-  runuser -u "$DEPLOY_USER" -- env DEPLOY_PATH="$DEPLOY_PATH" bash "$DEPLOY_PATH/scripts/deploy.sh"
-else
-  echo "==> Primer deploy pendiente hasta que GitHub Actions cree production"
-fi
+echo "==> Ejecutando primer CI/deploy"
+runuser -u "$DEPLOY_USER" -- env DEPLOY_PATH="$DEPLOY_PATH" DEPLOY_BRANCH="$DEPLOY_BRANCH" bash "$DEPLOY_PATH/scripts/deploy.sh"
+runuser -u "$DEPLOY_USER" -- git -C "$DEPLOY_PATH" rev-parse "origin/$DEPLOY_BRANCH" > "$DEPLOY_PATH/.last-deployed-sha"
+chown "$DEPLOY_USER:$DEPLOY_USER" "$DEPLOY_PATH/.last-deployed-sha"
 
 echo
 echo "=============================================="
-echo "Servidor preparado para despliegue automático"
-echo "Repo: $DEPLOY_PATH"
-echo "API:  http://146.83.198.35:${APP_PORT}/api"
-echo "Log:  /var/log/clase2taller-deploy.log"
+echo "Servidor preparado para CI/CD automático"
+echo "Rama: $DEPLOY_BRANCH"
+echo "Repo:  $DEPLOY_PATH"
+echo "API:   http://146.83.198.35:${APP_PORT}/api"
+echo "Log:   /var/log/clase2taller-deploy.log"
 echo "=============================================="
