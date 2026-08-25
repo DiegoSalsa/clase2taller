@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# El servidor UBB está detrás de VPN, así que GitHub Actions no puede entrar por SSH.
-# Este script corre mediante cron en el servidor y consulta GitHub desde adentro.
+# El servidor UBB está detrás de VPN, así que el despliegue se inicia desde
+# el propio servidor: cada 2 minutos consulta main y despliega si cambió.
 
 DEPLOY_PATH="${DEPLOY_PATH:-/srv/clase2taller}"
-BRANCH="${DEPLOY_BRANCH:-production}"
+BRANCH="${DEPLOY_BRANCH:-main}"
 LOCK_FILE="/tmp/clase2taller-auto-deploy.lock"
 LAST_SHA_FILE="$DEPLOY_PATH/.last-deployed-sha"
 
@@ -37,6 +37,6 @@ if DEPLOY_PATH="$DEPLOY_PATH" DEPLOY_BRANCH="$BRANCH" bash "$DEPLOY_PATH/scripts
   echo "$REMOTE_SHA" > "$LAST_SHA_FILE"
   echo "[$(date -u +'%FT%TZ')] Deploy automático OK."
 else
-  echo "[$(date -u +'%FT%TZ')] Deploy automático FALLÓ; se reintentará en el próximo ciclo." >&2
+  echo "[$(date -u +'%FT%TZ')] Validación/deploy FALLÓ; se mantendrá la versión anterior y se reintentará." >&2
   exit 1
 fi
