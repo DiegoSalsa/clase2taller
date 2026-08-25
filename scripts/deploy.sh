@@ -2,13 +2,13 @@
 set -euo pipefail
 
 DEPLOY_PATH="${DEPLOY_PATH:-/srv/clase2taller}"
-BRANCH="${DEPLOY_BRANCH:-production}"
+BRANCH="${DEPLOY_BRANCH:-main}"
 PM2_NAME="${PM2_NAME:-clase2taller-backend}"
 
 cd "$DEPLOY_PATH"
 
 echo "============================================================"
-echo "[$(date -u +'%FT%TZ')] Desplegando origin/$BRANCH"
+echo "[$(date -u +'%FT%TZ')] Validando y desplegando origin/$BRANCH"
 echo "============================================================"
 
 git fetch origin "$BRANCH" --prune --quiet
@@ -23,12 +23,18 @@ fi
 echo "==> Instalando dependencias"
 (
   cd backend
-  # El proyecto actual importa morgan en runtime aunque está en devDependencies,
-  # por lo que se instalan todas las dependencias para no romper producción.
+  # morgan está importado en runtime aunque actualmente figura en devDependencies,
+  # por eso instalamos todas las dependencias.
   npm ci --silent
 )
 
-echo "==> Reiniciando backend con PM2"
+echo "==> CI: ejecutando ESLint"
+(
+  cd backend
+  npm run lint
+)
+
+echo "==> CI OK; reiniciando backend con PM2"
 if pm2 describe "$PM2_NAME" >/dev/null 2>&1; then
   pm2 reload "$PM2_NAME" --update-env
 else
@@ -44,11 +50,11 @@ PORT="${PORT:-1546}"
 
 sleep 3
 if curl --max-time 5 --silent --show-error "http://127.0.0.1:${PORT}/api" >/dev/null; then
-  echo "==> Health check HTTP OK en localhost:${PORT}"
+  echo "==> Smoke test HTTP OK en localhost:${PORT}"
 else
   echo "ERROR: el backend no respondió en localhost:${PORT}." >&2
   pm2 logs "$PM2_NAME" --lines 40 --nostream || true
   exit 1
 fi
 
-echo "[$(date -u +'%FT%TZ')] Deploy completado: $(git rev-parse --short HEAD)"
+echo "[$(date -u +'%FT%TZ')] CI/CD completado: $(git rev-parse --short HEAD)"
